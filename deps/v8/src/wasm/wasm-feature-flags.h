@@ -27,7 +27,18 @@
                                                                                \
   /* No official proposal (yet?). */                                           \
   /* V8 side owner: clemensb */                                                \
-  V(compilation_hints, "compilation hints section", false)
+  V(compilation_hints, "compilation hints section", false)                     \
+                                                                               \
+  /* GC proposal (early prototype, might change dramatically) */               \
+  /* Official proposal: https://github.com/WebAssembly/gc */                   \
+  /* Prototype engineering spec: https://bit.ly/3cWcm6Q */                     \
+  /* V8 side owner: jkummerow */                                               \
+  V(gc, "garbage collection", false)                                           \
+                                                                               \
+  /* Typed function references proposal. */                                    \
+  /* Official proposal: https://github.com/WebAssembly/function-references */  \
+  /* V8 side owner: ahaas */                                                   \
+  V(typed_funcref, "typed function references", false)
 
 // #############################################################################
 // Staged features (disabled by default, but enabled via --wasm-staging (also
@@ -38,11 +49,11 @@
 // be shipped with enough lead time to the next branch to allow for
 // stabilization.
 #define FOREACH_WASM_STAGING_FEATURE_FLAG(V) /*          (force 80 columns) */ \
-  /* Reference Types, a.k.a. anyref proposal. */                               \
+  /* Reference Types, a.k.a. reftypes proposal. */                             \
   /* https://github.com/WebAssembly/reference-types */                         \
   /* V8 side owner: ahaas */                                                   \
   /* Staged in v7.8. */                                                        \
-  V(anyref, "anyref opcodes", false)                                           \
+  V(reftypes, "reference type opcodes", false)                                 \
                                                                                \
   /* JS BitInt to wasm i64 integration. */                                     \
   /* https://github.com/WebAssembly/JS-BigInt-integration */                   \

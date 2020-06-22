@@ -230,6 +230,82 @@ int32_t float64_to_uint64_wrapper(Address data) {
   return 0;
 }
 
+void float32_to_int64_sat_wrapper(Address data) {
+  float input = ReadUnalignedValue<float>(data);
+  // We use "<" here to check the upper bound because of rounding problems: With
+  // "<=" some inputs would be considered within int64 range which are actually
+  // not within int64 range.
+  if (input < static_cast<float>(std::numeric_limits<int64_t>::max()) &&
+      input >= static_cast<float>(std::numeric_limits<int64_t>::min())) {
+    WriteUnalignedValue<int64_t>(data, static_cast<int64_t>(input));
+    return;
+  }
+  if (std::isnan(input)) {
+    WriteUnalignedValue<int64_t>(data, 0);
+    return;
+  }
+  if (input < 0.0) {
+    WriteUnalignedValue<int64_t>(data, std::numeric_limits<int64_t>::min());
+    return;
+  }
+  WriteUnalignedValue<int64_t>(data, std::numeric_limits<int64_t>::max());
+}
+
+void float32_to_uint64_sat_wrapper(Address data) {
+  float input = ReadUnalignedValue<float>(data);
+  // We use "<" here to check the upper bound because of rounding problems: With
+  // "<=" some inputs would be considered within uint64 range which are actually
+  // not within uint64 range.
+  if (input < static_cast<float>(std::numeric_limits<uint64_t>::max()) &&
+      input >= 0.0) {
+    WriteUnalignedValue<uint64_t>(data, static_cast<uint64_t>(input));
+    return;
+  }
+  if (input >= std::numeric_limits<uint64_t>::max()) {
+    WriteUnalignedValue<uint64_t>(data, std::numeric_limits<uint64_t>::max());
+    return;
+  }
+  WriteUnalignedValue<uint64_t>(data, 0);
+}
+
+void float64_to_int64_sat_wrapper(Address data) {
+  double input = ReadUnalignedValue<double>(data);
+  // We use "<" here to check the upper bound because of rounding problems: With
+  // "<=" some inputs would be considered within int64 range which are actually
+  // not within int64 range.
+  if (input < static_cast<double>(std::numeric_limits<int64_t>::max()) &&
+      input >= static_cast<double>(std::numeric_limits<int64_t>::min())) {
+    WriteUnalignedValue<int64_t>(data, static_cast<int64_t>(input));
+    return;
+  }
+  if (std::isnan(input)) {
+    WriteUnalignedValue<int64_t>(data, 0);
+    return;
+  }
+  if (input < 0.0) {
+    WriteUnalignedValue<int64_t>(data, std::numeric_limits<int64_t>::min());
+    return;
+  }
+  WriteUnalignedValue<int64_t>(data, std::numeric_limits<int64_t>::max());
+}
+
+void float64_to_uint64_sat_wrapper(Address data) {
+  double input = ReadUnalignedValue<double>(data);
+  // We use "<" here to check the upper bound because of rounding problems: With
+  // "<=" some inputs would be considered within int64 range which are actually
+  // not within int64 range.
+  if (input < static_cast<double>(std::numeric_limits<uint64_t>::max()) &&
+      input >= 0.0) {
+    WriteUnalignedValue<uint64_t>(data, static_cast<uint64_t>(input));
+    return;
+  }
+  if (input >= std::numeric_limits<uint64_t>::max()) {
+    WriteUnalignedValue<uint64_t>(data, std::numeric_limits<uint64_t>::max());
+    return;
+  }
+  WriteUnalignedValue<uint64_t>(data, 0);
+}
+
 int32_t int64_div_wrapper(Address data) {
   int64_t dividend = ReadUnalignedValue<int64_t>(data);
   int64_t divisor = ReadUnalignedValue<int64_t>(data + sizeof(dividend));
@@ -323,6 +399,20 @@ void float64_pow_wrapper(Address data) {
   double x = ReadUnalignedValue<double>(data);
   double y = ReadUnalignedValue<double>(data + sizeof(x));
   WriteUnalignedValue<double>(data, base::ieee754::pow(x, y));
+}
+
+template <typename T, T (*float_round_op)(T)>
+void simd_float_round_wrapper(Address data) {
+  constexpr int n = kSimd128Size / sizeof(T);
+  for (int i = 0; i < n; i++) {
+    WriteUnalignedValue<T>(
+        data + (i * sizeof(T)),
+        float_round_op(ReadUnalignedValue<T>(data + (i * sizeof(T)))));
+  }
+}
+
+void f32x4_ceil_wrapper(Address data) {
+  simd_float_round_wrapper<float, &ceilf>(data);
 }
 
 namespace {

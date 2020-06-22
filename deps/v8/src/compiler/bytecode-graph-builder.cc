@@ -69,6 +69,7 @@ class BytecodeGraphBuilder {
   // Helper function for creating a feedback source containing type feedback
   // vector and a feedback slot.
   FeedbackSource CreateFeedbackSource(int slot_id);
+  FeedbackSource CreateFeedbackSource(FeedbackSlot slot);
 
   void set_environment(Environment* env) { environment_ = env; }
   const Environment* environment() const { return environment_; }
@@ -242,14 +243,6 @@ class BytecodeGraphBuilder {
   // Helper function to create a context extension check.
   Environment* CheckContextExtensionAtDepth(Environment* slow_environment,
                                             uint32_t depth);
-
-  // Helper function to create binary operation hint from the recorded
-  // type feedback.
-  BinaryOperationHint GetBinaryOperationHint(int operand_index);
-
-  // Helper function to create compare operation hint from the recorded
-  // type feedback.
-  CompareOperationHint GetCompareOperationHint();
 
   // Helper function to create for-in mode from the recorded type feedback.
   ForInMode GetForInMode(int operand_index);
@@ -443,10 +436,11 @@ class BytecodeGraphBuilder {
 
   TickCounter* const tick_counter_;
 
-  static int const kBinaryOperationHintIndex = 1;
-  static int const kCountOperationHintIndex = 0;
-  static int const kBinaryOperationSmiHintIndex = 1;
-  static int const kUnaryOperationHintIndex = 0;
+  static constexpr int kBinaryOperationHintIndex = 1;
+  static constexpr int kBinaryOperationSmiHintIndex = 1;
+  static constexpr int kCompareOperationHintIndex = 1;
+  static constexpr int kCountOperationHintIndex = 0;
+  static constexpr int kUnaryOperationHintIndex = 0;
 
   DISALLOW_COPY_AND_ASSIGN(BytecodeGraphBuilder);
 };
@@ -1022,7 +1016,10 @@ Node* BytecodeGraphBuilder::BuildLoadNativeContextField(int index) {
 }
 
 FeedbackSource BytecodeGraphBuilder::CreateFeedbackSource(int slot_id) {
-  FeedbackSlot slot = FeedbackVector::ToSlot(slot_id);
+  return CreateFeedbackSource(FeedbackVector::ToSlot(slot_id));
+}
+
+FeedbackSource BytecodeGraphBuilder::CreateFeedbackSource(FeedbackSlot slot) {
   return FeedbackSource(feedback_vector(), slot);
 }
 
@@ -2179,8 +2176,7 @@ void BytecodeGraphBuilder::VisitCreateObjectLiteral() {
 }
 
 void BytecodeGraphBuilder::VisitCreateEmptyObjectLiteral() {
-  Node* literal =
-      NewNode(javascript()->CreateEmptyLiteralObject(), GetFunctionClosure());
+  Node* literal = NewNode(javascript()->CreateEmptyLiteralObject());
   environment()->BindAccumulator(literal);
 }
 
@@ -2210,10 +2206,7 @@ void BytecodeGraphBuilder::VisitGetTemplateObject() {
 Node* const* BytecodeGraphBuilder::GetCallArgumentsFromRegisters(
     Node* callee, Node* receiver, interpreter::Register first_arg,
     int arg_count) {
-  // The arity of the Call node -- includes the callee, receiver and function
-  // arguments.
-  int arity = 2 + arg_count;
-
+  int arity = kTargetAndReceiver + arg_count;
   Node** all = local_zone()->NewArray<Node*>(static_cast<size_t>(arity));
 
   all[0] = callee;
@@ -2222,7 +2215,7 @@ Node* const* BytecodeGraphBuilder::GetCallArgumentsFromRegisters(
   // The function arguments are in consecutive registers.
   int arg_base = first_arg.index();
   for (int i = 0; i < arg_count; ++i) {
-    all[2 + i] =
+    all[kTargetAndReceiver + i] =
         environment()->LookupRegister(interpreter::Register(arg_base + i));
   }
 
@@ -2247,7 +2240,8 @@ Node* BytecodeGraphBuilder::ProcessCallArguments(const Operator* call_op,
 
   Node* const* call_args = GetCallArgumentsFromRegisters(callee, receiver_node,
                                                          first_arg, arg_count);
-  return ProcessCallArguments(call_op, call_args, 2 + arg_count);
+  return ProcessCallArguments(call_op, call_args,
+                              kTargetAndReceiver + arg_count);
 }
 
 void BytecodeGraphBuilder::BuildCall(ConvertReceiverMode receiver_mode,
@@ -2318,8 +2312,8 @@ void BytecodeGraphBuilder::BuildCallVarArgs(ConvertReceiverMode receiver_mode) {
                       : static_cast<int>(reg_count) - 1;
   Node* const* call_args =
       ProcessCallVarArgs(receiver_mode, callee, first_reg, arg_count);
-  BuildCall(receiver_mode, call_args, static_cast<size_t>(2 + arg_count),
-            slot_id);
+  BuildCall(receiver_mode, call_args,
+            static_cast<size_t>(kTargetAndReceiver + arg_count), slot_id);
 }
 
 void BytecodeGraphBuilder::VisitCallAnyReceiver() {
@@ -2341,9 +2335,7 @@ void BytecodeGraphBuilder::VisitCallNoFeedback() {
   // The receiver is the first register, followed by the arguments in the
   // consecutive registers.
   int arg_count = static_cast<int>(reg_count) - 1;
-  // The arity of the Call node -- includes the callee, receiver and function
-  // arguments.
-  int arity = 2 + arg_count;
+  int arity = kTargetAndReceiver + arg_count;
 
   // Setting call frequency to a value less than min_inlining frequency to
   // prevent inlining of one-shot call node.
@@ -2459,7 +2451,7 @@ void BytecodeGraphBuilder::VisitCallWithSpread() {
     node = lowering.value();
   } else {
     DCHECK(!lowering.Changed());
-    node = ProcessCallArguments(op, args, 2 + arg_count);
+    node = ProcessCallArguments(op, args, kTargetAndReceiver + arg_count);
   }
   environment()->BindAccumulator(node, Environment::kAttachFrameState);
 }
@@ -2472,10 +2464,11 @@ void BytecodeGraphBuilder::VisitCallJSRuntime() {
   size_t reg_count = bytecode_iterator().GetRegisterCountOperand(2);
   int arg_count = static_cast<int>(reg_count);
 
-  const Operator* call = javascript()->Call(2 + arg_count);
+  const Operator* call = javascript()->Call(kTargetAndReceiver + arg_count);
   Node* const* call_args = ProcessCallVarArgs(
       ConvertReceiverMode::kNullOrUndefined, callee, first_reg, arg_count);
-  Node* value = ProcessCallArguments(call, call_args, 2 + arg_count);
+  Node* value =
+      ProcessCallArguments(call, call_args, kTargetAndReceiver + arg_count);
   environment()->BindAccumulator(value, Environment::kAttachFrameState);
 }
 
@@ -2532,8 +2525,7 @@ void BytecodeGraphBuilder::VisitCallRuntimeForPair() {
 Node* const* BytecodeGraphBuilder::GetConstructArgumentsFromRegister(
     Node* target, Node* new_target, interpreter::Register first_arg,
     int arg_count) {
-  // arity is args + callee and new target.
-  int arity = arg_count + 2;
+  int arity = kTargetAndNewTarget + arg_count;
   Node** all = local_zone()->NewArray<Node*>(static_cast<size_t>(arity));
   all[0] = target;
   int first_arg_index = first_arg.index();
@@ -2563,9 +2555,10 @@ void BytecodeGraphBuilder::VisitConstruct() {
   Node* callee = environment()->LookupRegister(callee_reg);
 
   CallFrequency frequency = ComputeCallFrequency(slot_id);
-  const Operator* op = javascript()->Construct(
-      static_cast<uint32_t>(reg_count + 2), frequency, feedback);
-  int arg_count = static_cast<int>(reg_count);
+  const uint32_t arg_count = static_cast<uint32_t>(reg_count);
+  const uint32_t arg_count_with_extra_args = kTargetAndNewTarget + arg_count;
+  const Operator* op =
+      javascript()->Construct(arg_count_with_extra_args, frequency, feedback);
   Node* const* args = GetConstructArgumentsFromRegister(callee, new_target,
                                                         first_reg, arg_count);
   JSTypeHintLowering::LoweringResult lowering = TryBuildSimplifiedConstruct(
@@ -2577,7 +2570,7 @@ void BytecodeGraphBuilder::VisitConstruct() {
     node = lowering.value();
   } else {
     DCHECK(!lowering.Changed());
-    node = ProcessConstructArguments(op, args, 2 + arg_count);
+    node = ProcessConstructArguments(op, args, arg_count_with_extra_args);
   }
   environment()->BindAccumulator(node, Environment::kAttachFrameState);
 }
@@ -2594,9 +2587,10 @@ void BytecodeGraphBuilder::VisitConstructWithSpread() {
   Node* callee = environment()->LookupRegister(callee_reg);
 
   CallFrequency frequency = ComputeCallFrequency(slot_id);
+  const uint32_t arg_count = static_cast<uint32_t>(reg_count);
+  const uint32_t arg_count_with_extra_args = kTargetAndNewTarget + arg_count;
   const Operator* op = javascript()->ConstructWithSpread(
-      static_cast<uint32_t>(reg_count + 2), frequency, feedback);
-  int arg_count = static_cast<int>(reg_count);
+      arg_count_with_extra_args, frequency, feedback);
   Node* const* args = GetConstructArgumentsFromRegister(callee, new_target,
                                                         first_reg, arg_count);
   JSTypeHintLowering::LoweringResult lowering = TryBuildSimplifiedConstruct(
@@ -2608,7 +2602,7 @@ void BytecodeGraphBuilder::VisitConstructWithSpread() {
     node = lowering.value();
   } else {
     DCHECK(!lowering.Changed());
-    node = ProcessConstructArguments(op, args, 2 + arg_count);
+    node = ProcessConstructArguments(op, args, arg_count_with_extra_args);
   }
   environment()->BindAccumulator(node, Environment::kAttachFrameState);
 }
@@ -2754,23 +2748,6 @@ void BytecodeGraphBuilder::BuildBinaryOp(const Operator* op) {
   environment()->BindAccumulator(node, Environment::kAttachFrameState);
 }
 
-// Helper function to create binary operation hint from the recorded type
-// feedback.
-BinaryOperationHint BytecodeGraphBuilder::GetBinaryOperationHint(
-    int operand_index) {
-  FeedbackSlot slot = bytecode_iterator().GetSlotOperand(operand_index);
-  FeedbackSource source(feedback_vector(), slot);
-  return broker()->GetFeedbackForBinaryOperation(source);
-}
-
-// Helper function to create compare operation hint from the recorded type
-// feedback.
-CompareOperationHint BytecodeGraphBuilder::GetCompareOperationHint() {
-  FeedbackSlot slot = bytecode_iterator().GetSlotOperand(1);
-  FeedbackSource source(feedback_vector(), slot);
-  return broker()->GetFeedbackForCompareOperation(source);
-}
-
 // Helper function to create for-in mode from the recorded type feedback.
 ForInMode BytecodeGraphBuilder::GetForInMode(int operand_index) {
   FeedbackSlot slot = bytecode_iterator().GetSlotOperand(operand_index);
@@ -2810,66 +2787,99 @@ SpeculationMode BytecodeGraphBuilder::GetSpeculationMode(int slot_id) const {
 }
 
 void BytecodeGraphBuilder::VisitBitwiseNot() {
-  BuildUnaryOp(javascript()->BitwiseNot());
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kUnaryOperationHintIndex));
+  BuildUnaryOp(javascript()->BitwiseNot(feedback));
 }
 
 void BytecodeGraphBuilder::VisitDec() {
-  BuildUnaryOp(javascript()->Decrement());
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kUnaryOperationHintIndex));
+  BuildUnaryOp(javascript()->Decrement(feedback));
 }
 
 void BytecodeGraphBuilder::VisitInc() {
-  BuildUnaryOp(javascript()->Increment());
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kUnaryOperationHintIndex));
+  BuildUnaryOp(javascript()->Increment(feedback));
 }
 
 void BytecodeGraphBuilder::VisitNegate() {
-  BuildUnaryOp(javascript()->Negate());
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kUnaryOperationHintIndex));
+  BuildUnaryOp(javascript()->Negate(feedback));
 }
 
 void BytecodeGraphBuilder::VisitAdd() {
-  BuildBinaryOp(
-      javascript()->Add(GetBinaryOperationHint(kBinaryOperationHintIndex)));
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kBinaryOperationHintIndex));
+  BuildBinaryOp(javascript()->Add(feedback));
 }
 
 void BytecodeGraphBuilder::VisitSub() {
-  BuildBinaryOp(javascript()->Subtract());
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kBinaryOperationHintIndex));
+  BuildBinaryOp(javascript()->Subtract(feedback));
 }
 
 void BytecodeGraphBuilder::VisitMul() {
-  BuildBinaryOp(javascript()->Multiply());
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kBinaryOperationHintIndex));
+  BuildBinaryOp(javascript()->Multiply(feedback));
 }
 
-void BytecodeGraphBuilder::VisitDiv() { BuildBinaryOp(javascript()->Divide()); }
+void BytecodeGraphBuilder::VisitDiv() {
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kBinaryOperationHintIndex));
+  BuildBinaryOp(javascript()->Divide(feedback));
+}
 
 void BytecodeGraphBuilder::VisitMod() {
-  BuildBinaryOp(javascript()->Modulus());
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kBinaryOperationHintIndex));
+  BuildBinaryOp(javascript()->Modulus(feedback));
 }
 
 void BytecodeGraphBuilder::VisitExp() {
-  BuildBinaryOp(javascript()->Exponentiate());
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kBinaryOperationHintIndex));
+  BuildBinaryOp(javascript()->Exponentiate(feedback));
 }
 
 void BytecodeGraphBuilder::VisitBitwiseOr() {
-  BuildBinaryOp(javascript()->BitwiseOr());
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kBinaryOperationHintIndex));
+  BuildBinaryOp(javascript()->BitwiseOr(feedback));
 }
 
 void BytecodeGraphBuilder::VisitBitwiseXor() {
-  BuildBinaryOp(javascript()->BitwiseXor());
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kBinaryOperationHintIndex));
+  BuildBinaryOp(javascript()->BitwiseXor(feedback));
 }
 
 void BytecodeGraphBuilder::VisitBitwiseAnd() {
-  BuildBinaryOp(javascript()->BitwiseAnd());
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kBinaryOperationHintIndex));
+  BuildBinaryOp(javascript()->BitwiseAnd(feedback));
 }
 
 void BytecodeGraphBuilder::VisitShiftLeft() {
-  BuildBinaryOp(javascript()->ShiftLeft());
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kBinaryOperationHintIndex));
+  BuildBinaryOp(javascript()->ShiftLeft(feedback));
 }
 
 void BytecodeGraphBuilder::VisitShiftRight() {
-  BuildBinaryOp(javascript()->ShiftRight());
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kBinaryOperationHintIndex));
+  BuildBinaryOp(javascript()->ShiftRight(feedback));
 }
 
 void BytecodeGraphBuilder::VisitShiftRightLogical() {
-  BuildBinaryOp(javascript()->ShiftRightLogical());
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kBinaryOperationHintIndex));
+  BuildBinaryOp(javascript()->ShiftRightLogical(feedback));
 }
 
 void BytecodeGraphBuilder::BuildBinaryOpWithImmediate(const Operator* op) {
@@ -2894,52 +2904,75 @@ void BytecodeGraphBuilder::BuildBinaryOpWithImmediate(const Operator* op) {
 }
 
 void BytecodeGraphBuilder::VisitAddSmi() {
-  BuildBinaryOpWithImmediate(
-      javascript()->Add(GetBinaryOperationHint(kBinaryOperationSmiHintIndex)));
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kBinaryOperationSmiHintIndex));
+  BuildBinaryOpWithImmediate(javascript()->Add(feedback));
 }
 
 void BytecodeGraphBuilder::VisitSubSmi() {
-  BuildBinaryOpWithImmediate(javascript()->Subtract());
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kBinaryOperationSmiHintIndex));
+  BuildBinaryOpWithImmediate(javascript()->Subtract(feedback));
 }
 
 void BytecodeGraphBuilder::VisitMulSmi() {
-  BuildBinaryOpWithImmediate(javascript()->Multiply());
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kBinaryOperationSmiHintIndex));
+  BuildBinaryOpWithImmediate(javascript()->Multiply(feedback));
 }
 
 void BytecodeGraphBuilder::VisitDivSmi() {
-  BuildBinaryOpWithImmediate(javascript()->Divide());
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kBinaryOperationSmiHintIndex));
+  BuildBinaryOpWithImmediate(javascript()->Divide(feedback));
 }
 
 void BytecodeGraphBuilder::VisitModSmi() {
-  BuildBinaryOpWithImmediate(javascript()->Modulus());
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kBinaryOperationSmiHintIndex));
+  BuildBinaryOpWithImmediate(javascript()->Modulus(feedback));
 }
 
 void BytecodeGraphBuilder::VisitExpSmi() {
-  BuildBinaryOpWithImmediate(javascript()->Exponentiate());
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kBinaryOperationSmiHintIndex));
+  BuildBinaryOpWithImmediate(javascript()->Exponentiate(feedback));
 }
 
 void BytecodeGraphBuilder::VisitBitwiseOrSmi() {
-  BuildBinaryOpWithImmediate(javascript()->BitwiseOr());
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kBinaryOperationSmiHintIndex));
+  BuildBinaryOpWithImmediate(javascript()->BitwiseOr(feedback));
 }
 
 void BytecodeGraphBuilder::VisitBitwiseXorSmi() {
-  BuildBinaryOpWithImmediate(javascript()->BitwiseXor());
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kBinaryOperationSmiHintIndex));
+  BuildBinaryOpWithImmediate(javascript()->BitwiseXor(feedback));
 }
 
 void BytecodeGraphBuilder::VisitBitwiseAndSmi() {
-  BuildBinaryOpWithImmediate(javascript()->BitwiseAnd());
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kBinaryOperationSmiHintIndex));
+  BuildBinaryOpWithImmediate(javascript()->BitwiseAnd(feedback));
 }
 
 void BytecodeGraphBuilder::VisitShiftLeftSmi() {
-  BuildBinaryOpWithImmediate(javascript()->ShiftLeft());
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kBinaryOperationSmiHintIndex));
+  BuildBinaryOpWithImmediate(javascript()->ShiftLeft(feedback));
 }
 
 void BytecodeGraphBuilder::VisitShiftRightSmi() {
-  BuildBinaryOpWithImmediate(javascript()->ShiftRight());
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kBinaryOperationSmiHintIndex));
+  BuildBinaryOpWithImmediate(javascript()->ShiftRight(feedback));
 }
 
 void BytecodeGraphBuilder::VisitShiftRightLogicalSmi() {
-  BuildBinaryOpWithImmediate(javascript()->ShiftRightLogical());
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kBinaryOperationSmiHintIndex));
+  BuildBinaryOpWithImmediate(javascript()->ShiftRightLogical(feedback));
 }
 
 void BytecodeGraphBuilder::VisitLogicalNot() {
@@ -3008,27 +3041,39 @@ void BytecodeGraphBuilder::BuildCompareOp(const Operator* op) {
 }
 
 void BytecodeGraphBuilder::VisitTestEqual() {
-  BuildCompareOp(javascript()->Equal(GetCompareOperationHint()));
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kCompareOperationHintIndex));
+  BuildCompareOp(javascript()->Equal(feedback));
 }
 
 void BytecodeGraphBuilder::VisitTestEqualStrict() {
-  BuildCompareOp(javascript()->StrictEqual(GetCompareOperationHint()));
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kCompareOperationHintIndex));
+  BuildCompareOp(javascript()->StrictEqual(feedback));
 }
 
 void BytecodeGraphBuilder::VisitTestLessThan() {
-  BuildCompareOp(javascript()->LessThan(GetCompareOperationHint()));
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kCompareOperationHintIndex));
+  BuildCompareOp(javascript()->LessThan(feedback));
 }
 
 void BytecodeGraphBuilder::VisitTestGreaterThan() {
-  BuildCompareOp(javascript()->GreaterThan(GetCompareOperationHint()));
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kCompareOperationHintIndex));
+  BuildCompareOp(javascript()->GreaterThan(feedback));
 }
 
 void BytecodeGraphBuilder::VisitTestLessThanOrEqual() {
-  BuildCompareOp(javascript()->LessThanOrEqual(GetCompareOperationHint()));
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kCompareOperationHintIndex));
+  BuildCompareOp(javascript()->LessThanOrEqual(feedback));
 }
 
 void BytecodeGraphBuilder::VisitTestGreaterThanOrEqual() {
-  BuildCompareOp(javascript()->GreaterThanOrEqual(GetCompareOperationHint()));
+  FeedbackSource feedback = CreateFeedbackSource(
+      bytecode_iterator().GetSlotOperand(kCompareOperationHintIndex));
+  BuildCompareOp(javascript()->GreaterThanOrEqual(feedback));
 }
 
 void BytecodeGraphBuilder::VisitTestReferenceEqual() {

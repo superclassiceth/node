@@ -193,7 +193,7 @@ bool Runtime::MayAllocate(FunctionId id) {
 }
 
 bool Runtime::IsWhitelistedForFuzzing(FunctionId id) {
-  CHECK(FLAG_allow_natives_for_fuzzing);
+  CHECK(FLAG_fuzzing);
   switch (id) {
     // Runtime functions whitelisted for all fuzzers. Only add functions that
     // help increase coverage.
@@ -212,6 +212,7 @@ bool Runtime::IsWhitelistedForFuzzing(FunctionId id) {
     // Runtime functions only permitted for non-differential fuzzers.
     // This list may contain functions performing extra checks or returning
     // different values in the context of different flags passed to V8.
+    case Runtime::kGetOptimizationStatus:
     case Runtime::kHeapObjectVerify:
     case Runtime::kIsBeingInterpreted:
       return !FLAG_allow_natives_for_differential_fuzzing;
